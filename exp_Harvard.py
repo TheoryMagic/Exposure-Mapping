@@ -160,9 +160,7 @@ def run_experiments_and_collect(N, t_steps, alpha,
                                 true_mu0=0.5, true_mu1=0.8,
                                 delta_func=None,
                                 design_name='MAD',
-                                eta=0.028,
-                                seed=123):
-    np.random.seed(seed)
+                                eta=0.028):
 
     records = []
     mus = [true_mu0, true_mu1]
@@ -195,7 +193,6 @@ def run_experiments_and_collect(N, t_steps, alpha,
 
         sig_hats = results['sig_hats']
         V_is = compute_CS_eta_new(eta, sig_hats, alpha, t_steps)
-        
         ate_seq = results['ate']
         upper_seq = ate_seq + V_is
         lower_seq = ate_seq - V_is
@@ -214,16 +211,12 @@ def run_experiments_and_collect(N, t_steps, alpha,
             rec = {
                 'replicate': rep_idx+1,
                 'time': i+1,
+                'alpha': alpha,
                 'Method': design_name,
                 'ATE_est': ate_seq[i],
                 'V_i': V_is[i],
                 'upper': upper_seq[i],
                 'lower': lower_seq[i],
-                'covered': int( 
-                    (true_mu1 - true_mu0) >= lower_seq[i] and 
-                    (true_mu1 - true_mu0) <= upper_seq[i] 
-                ),
-                'contain_zero': int( 0 >= lower_seq[i] and 0 <= upper_seq[i] ),
                 'reward': rewards_seq[i],
                 'instant_regret': instant_regret[i],
                 'cumsum_regret': cumsum_regret[i]
@@ -234,113 +227,93 @@ def run_experiments_and_collect(N, t_steps, alpha,
 
 
 ##############################################################################
-# 5) 主函数：对比 Bernoulli / Standard / Unclipped MAD 并绘制4张图
+# 5) 主函数：对比不同 alpha 的方法并绘制 Regret 和 Width
 ##############################################################################
 if __name__ == '__main__':
     N = 100
     t_steps = 10000
-    alpha = 0.05
-    true_mu0 = 0.6
+    true_mu0 = 0.5
     true_mu1 = 0.8
-    true_ATE = true_mu1 - true_mu0
+    alphas = [0.24, 0.2, 0.15, 0.1, 0.05]
+    methods = ['Bernoulli', 'Standard', 'Unclipped MAD']
+    colors = {'Bernoulli': 'blue', 'Standard': 'red', 'Unclipped MAD': 'green'}
+    styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]  # 预定义五种线型
+    np.random.seed(1337) 
+    all_dfs = []
 
-    eta = np.sqrt(
-        -2*np.log(alpha) + np.log(-2*np.log(alpha)+1)
-    ) / np.sqrt(t_steps)
-    print("Computed eta =", eta)
+    for alpha in alphas:
+        eta = np.sqrt(
+            -2*np.log(alpha) + np.log(-2*np.log(alpha)+1)
+        ) / np.sqrt(t_steps)
 
-    def delta_unclipped(t):
-        return 1.0/(t**0.24)
+        for method in methods:
+            if method == 'Unclipped MAD':
+                delta_func = lambda t: 1.0/(t**0.24)
+            else:
+                delta_func = None
 
-    # 跑三个实验
-    df_bern = run_experiments_and_collect(
-        N, t_steps, alpha,
-        true_mu0, true_mu1,
-        design_name='Bernoulli',
-        eta=eta,
-        seed=111
-    )
-    df_std = run_experiments_and_collect(
-        N, t_steps, alpha,
-        true_mu0, true_mu1,
-        design_name='Standard',
-        eta=eta,
-        seed=222
-    )
-    df_unclip = run_experiments_and_collect(
-        N, t_steps, alpha,
-        true_mu0, true_mu1,
-        delta_func=delta_unclipped,
-        design_name='Unclipped MAD',
-        eta=eta,
-        seed=333
-    )
+            df = run_experiments_and_collect(
+                N, t_steps, alpha,
+                true_mu0, true_mu1,
+                delta_func=delta_func,
+                design_name=method,
+                eta=eta
+            )
+            all_dfs.append(df)
 
-    all_df = pd.concat([df_bern, df_std, df_unclip], ignore_index=True)
+    all_df = pd.concat(all_dfs, ignore_index=True)
 
     # 计算 CI 宽度
     all_df['width'] = all_df['upper'] - all_df['lower']
     all_df['width'] = all_df['width'].clip(upper=1.0)
 
-    # coverage
-    coverage_df = (all_df.groupby(['Method','time'])['covered']
-                   .mean().reset_index(name='coverage'))
-
-    # proportion stopped
-    all_df['stopped'] = 1 - all_df['contain_zero']
-    stop_df = (all_df.groupby(['Method','time'])['stopped']
-               .mean().reset_index(name='prop_stopped'))
-
     # cumulative regret
-    regret_df = (all_df.groupby(['Method','time'])['cumsum_regret']
-                 .mean().reset_index(name='mean_cum_regret'))
+    regret_df = (all_df.groupby(['alpha', 'Method', 'time'])
+                 .agg(mean_cum_regret=('cumsum_regret', 'mean'),
+                      se_cum_regret=('cumsum_regret', 'sem'))
+                 .reset_index())
 
-    # width
-    width_df = (all_df.groupby(['Method','time'])['width']
-                .mean().reset_index(name='mean_width'))
+    # average width
+    width_df = (all_df.groupby(['alpha', 'Method', 'time'])
+                .agg(mean_width=('width', 'mean'),
+                     se_width=('width', 'sem'))
+                .reset_index())
 
-    merged = coverage_df.merge(stop_df, on=['Method','time'])
-    merged = merged.merge(regret_df, on=['Method','time'])
-    merged = merged.merge(width_df, on=['Method','time'])
-
-    # ==== 画4张图 ====
-    # 1) Coverage
-    plt.figure(figsize=(8,5))
-    sns.lineplot(data=merged, x='time', y='coverage', hue='Method')
-    plt.axhline(1 - alpha, ls='--', color='gray', alpha=0.6, label='1 - alpha')
-    plt.xscale('log')  # 保持对数坐标
-    plt.ylim([0,1.05])
-    plt.title(f'Coverage (ATE={true_ATE})')
-    plt.legend()
+    # ==== 画图 ====
+    # 1) Cumulative Regret (线性 x 轴)
+    plt.figure(figsize=(10,6))
+    for method in methods:
+        for idx, alpha in enumerate(alphas):
+            sub_df = regret_df[(regret_df['Method'] == method) & (regret_df['alpha'] == alpha)]
+            plt.plot(sub_df['time'], sub_df['mean_cum_regret'], label=f'{method} (alpha={alpha})',
+                     color=colors[method], linestyle=styles[idx])
+            plt.fill_between(sub_df['time'],
+                             sub_df['mean_cum_regret'] - 2 * sub_df['se_cum_regret'],
+                             sub_df['mean_cum_regret'] + 2 * sub_df['se_cum_regret'],
+                             alpha=0.2, color=colors[method])
+    plt.title('Cumulative Regret Across Methods and Alphas')
+    plt.xlabel('Time')
+    plt.ylabel('Cumulative Regret')
+    plt.legend(title='Method (Alpha)')
     plt.tight_layout()
     plt.show()
 
-    # 2) Proportion Stopped
-    plt.figure(figsize=(8,5))
-    sns.lineplot(data=merged, x='time', y='prop_stopped', hue='Method')
-    plt.xscale('log')  # 保持对数坐标
-    plt.ylim([0,1.05])
-    plt.title('Proportion Stopped')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # 3) Cumulative Regret - 改为线性x轴
-    plt.figure(figsize=(8,5))
-    sns.lineplot(data=merged, x='time', y='mean_cum_regret', hue='Method')
-    # ---- 这里不再调用 plt.xscale('log') ----
-    plt.title('Cumulative Regret (Linear Time Axis)')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # 4) Average Width
-    plt.figure(figsize=(8,5))
-    sns.lineplot(data=merged, x='time', y='mean_width', hue='Method')
-    plt.xscale('log')  # 保持对数坐标
-    plt.ylim([0,1.05])
-    plt.title('Average Width (Capped at 1.0)')
-    plt.legend()
+    # 2) Average Width (对数 x 轴)
+    plt.figure(figsize=(10,6))
+    for method in methods:
+        for idx, alpha in enumerate(alphas):
+            sub_df = width_df[(width_df['Method'] == method) & (width_df['alpha'] == alpha)]
+            plt.plot(sub_df['time'], sub_df['mean_width'], label=f'{method} (alpha={alpha})',
+                     color=colors[method], linestyle=styles[idx])
+            plt.fill_between(sub_df['time'],
+                             sub_df['mean_width'] - 2 * sub_df['se_width'],
+                             sub_df['mean_width'] + 2 * sub_df['se_width'],
+                             alpha=0.2, color=colors[method])
+    plt.xscale('log')
+    plt.title('Average Width Across Methods and Alphas')
+    plt.xlabel('Time')
+    plt.ylabel('Average Width')
+    plt.legend(title='Method (Alpha)')
     plt.tight_layout()
     plt.show()
 
