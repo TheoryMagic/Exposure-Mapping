@@ -237,8 +237,7 @@ if __name__ == '__main__':
     alphas = [0.24, 0.2, 0.15, 0.1, 0.05]
     methods = ['Bernoulli', 'Standard', 'Unclipped MAD']
     colors = {'Bernoulli': 'blue', 'Standard': 'red', 'Unclipped MAD': 'green'}
-    styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]  # 预定义五种线型
-    np.random.seed(1337) 
+    styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]  # 预定义五种线型 
     all_dfs = []
 
     for alpha in alphas:
@@ -251,6 +250,8 @@ if __name__ == '__main__':
                 delta_func = lambda t: 1.0/(t**0.24)
             else:
                 delta_func = None
+
+            np.random.seed(1337)
 
             df = run_experiments_and_collect(
                 N, t_steps, alpha,
